@@ -12,7 +12,7 @@ class WavePlusDevice extends EventEmitter {
 }
 
 class WavePlus extends EventEmitter {
-  constructor (adapter) {
+  constructor (adapter, throttle) {
     super();
     this.uuid = ['b42e2a68ade711e489d3123b93f75cba'];
     this._adapter = adapter;
@@ -20,6 +20,8 @@ class WavePlus extends EventEmitter {
     this._deviceLookup = {};
     this._readingLookup = {};
     this._readingTimeout = {};
+    this._readingThrottleValue = throttle;
+    this._readingThrottle = {};
     this.sensorData = [];
 
     const registerDevice = device => {
@@ -36,19 +38,21 @@ class WavePlus extends EventEmitter {
 
       const manufacturerData = peripheral.advertisement ? peripheral.advertisement.manufacturerData : undefined;
       if (manufacturerData) {
-        const deviceInfo = struct.unpack('<HLH', manufacturerData);
-        if (deviceInfo[0] === 0x0334) {
-          if (!this._deviceLookup[peripheral.id]) {
-            newDevice = new WavePlusDevice({
-              id: peripheral.id,
-              serialNumber: deviceInfo[1],
-              address: peripheral.address,
-              connectable: peripheral.connectable
-            });
-            registerDevice(newDevice);
-            this.emit('found', newDevice);
-          }
-        }
+      	if (manufacturerData.length > 6) {
+					const deviceInfo = struct.unpack('<HLH', manufacturerData);
+					if (deviceInfo[0] === 0x0334) {
+						if (!this._deviceLookup[peripheral.id]) {
+							newDevice = new WavePlusDevice({
+								id: peripheral.id,
+								serialNumber: deviceInfo[1],
+								address: peripheral.address,
+								connectable: peripheral.connectable
+							});
+							registerDevice(newDevice);
+							this.emit('found', newDevice);
+						}
+					}
+				}
       }
 
       // Check if it is an advertisement by an already found Wave Plus device, emit "updated" event
@@ -64,14 +68,23 @@ class WavePlus extends EventEmitter {
 module.exports = WavePlus;
 
 function connect (wavePlus, device, peripheral) {
+  if (wavePlus._readingThrottle[peripheral.id]) {
+    return;
+  }
+  wavePlus._readingThrottle[peripheral.id] = setTimeout(() => {
+    wavePlus._readingThrottle[peripheral.id] = null;
+  }, wavePlus._readingThrottleValue || 60 * 1000);
+
   if (wavePlus._readingLookup[peripheral.id]) {
     return;
   }
-  wavePlus._readingTimeout[peripheral._id] = setTimeout(() => {
-    if (wavePlus._readingLookup[peripheral._id]) {
+
+  wavePlus._readingTimeout[peripheral.id] = setTimeout(() => {
+    if (wavePlus._readingLookup[peripheral.id]) {
       disconnect(device, peripheral);
     }
   }, 60 * 1000);
+
   wavePlus._readingLookup[peripheral.id] = true;
 
   wavePlus._adapter.stop();
@@ -123,7 +136,7 @@ function disconnect (wavePlus, peripheral) {
     if (error) {
       throw new Error(error);
     }
-    clearTimeout(wavePlus._readingTimeout[peripheral._id]);
+    clearTimeout(wavePlus._readingTimeout[peripheral.id]);
     wavePlus._readingLookup[peripheral.id] = null;
 
     wavePlus._adapter.start();
